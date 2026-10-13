@@ -5,3 +5,9 @@
 	encode gzip
 	reverse_proxy app:8000
 }
+
+# n8n (отдельный compose в /opt/n8n, общая docker-сеть proxy)
+n8n.144-31-229-139.sslip.io {
+	encode gzip
+	reverse_proxy n8n:5678
+}

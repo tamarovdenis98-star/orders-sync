@@ -44,6 +44,8 @@ curl https://144-31-229-139.sslip.io/api/sync/status
 FastAPI + SQLite, Docker Compose, Caddy (авто-HTTPS через Let's Encrypt), VPS.
 
 - `scripts/server-setup.sh` — однократная подготовка сервера (Docker, порты 80/443).
+- Caddy подключён к внешней docker-сети `proxy` и заодно проксирует n8n (`/opt/n8n`, отдельный compose).
+  На новом сервере сеть нужно создать один раз: `docker network create proxy`.
 - `deploy.conf` — ssh-хост и домен; `./deploy.sh` — заливка на сервер, `docker compose up -d --build`, ожидание `/health`.
 
 Локальный запуск:

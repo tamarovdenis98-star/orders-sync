@@ -19,9 +19,16 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    networks:
+      - default
+      - proxy
     depends_on:
       - app
 
 volumes:
   caddy_data:
   caddy_config:
+
+networks:
+  proxy:
+    external: true  # общая сеть с /opt/n8n: docker network create proxy
