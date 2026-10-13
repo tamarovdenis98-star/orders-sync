@@ -1,7 +1,11 @@
 import os
+import re
+from datetime import datetime
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
+
+import httpx
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,14 +37,24 @@ def db():
         conn.close()
 
 
+SOURCE_URL = os.getenv("SOURCE_URL", "https://test.ooobs.ru/api/orders")
+
+
 def init_db():
     with db() as c:
         c.executescript(
             """
-            CREATE TABLE IF NOT EXISTS items (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                text TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            CREATE TABLE IF NOT EXISTS clients (
+                phone TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL,
+                amount REAL NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sync_stats (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                received INTEGER, "unique" INTEGER,
+                duplicates_merged INTEGER, invalid_dropped INTEGER
             );
             """
         )
@@ -54,42 +68,111 @@ def health():
     return {"status": "ok"}
 
 
-# --- Пример CRUD (заменить под задание) ---------------------------------
+# --- Синхронизация заявок ---------------------------------------------------
 
-class ItemIn(BaseModel):
-    text: str
+def normalize_phone(raw) -> str | None:
+    digits = re.sub(r"\D", "", str(raw or ""))
+    if len(digits) == 10:
+        digits = "7" + digits
+    if len(digits) == 11 and digits[0] in "78":
+        return "+7" + digits[1:]
+    return None
 
 
-@app.get("/api/items")
-def list_items():
+def to_amount(v) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def to_ts(v) -> float:
+    try:
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def better(a: dict, b: dict) -> bool:
+    """True, если запись a должна победить b: больше amount, при равенстве позже created_at."""
+    return (a["amount"], to_ts(a["created_at"])) > (b["amount"], to_ts(b["created_at"]))
+
+
+def fmt_amount(v: float):
+    return int(v) if float(v).is_integer() else v
+
+
+def sync() -> None:
+    resp = httpx.get(SOURCE_URL, timeout=10)
+    resp.raise_for_status()
+    orders = resp.json()
+    if not isinstance(orders, list):
+        raise ValueError("source is not a JSON array")
+
+    best: dict[str, dict] = {}
+    invalid = 0
+    for o in orders:
+        o = o if isinstance(o, dict) else {}
+        phone = normalize_phone(o.get("phone"))
+        if not phone:
+            invalid += 1
+            continue
+        rec = {
+            "phone": phone,
+            "name": str(o.get("name") or ""),
+            "email": str(o.get("email") or ""),
+            "amount": to_amount(o.get("amount")),
+            "created_at": str(o.get("created_at") or ""),
+        }
+        if phone not in best or better(rec, best[phone]):
+            best[phone] = rec
+
+    valid = len(orders) - invalid
     with db() as c:
-        rows = c.execute("SELECT * FROM items ORDER BY id DESC").fetchall()
-    return [dict(r) for r in rows]
+        # Снимок пересобирается целиком в одной транзакции, phone — PRIMARY KEY: повтор не плодит дубли.
+        c.execute("DELETE FROM clients")
+        c.executemany(
+            "INSERT INTO clients (phone, name, email, amount, created_at) "
+            "VALUES (:phone, :name, :email, :amount, :created_at)",
+            list(best.values()),
+        )
+        c.execute(
+            "INSERT OR REPLACE INTO sync_stats VALUES (1, ?, ?, ?, ?)",
+            (len(orders), len(best), valid - len(best), invalid),
+        )
 
 
-@app.post("/api/items", status_code=201)
-def create_item(item: ItemIn):
-    if not item.text.strip():
-        raise HTTPException(400, "text is empty")
+def result() -> dict:
     with db() as c:
-        cur = c.execute("INSERT INTO items (text) VALUES (?)", (item.text,))
-        row = c.execute("SELECT * FROM items WHERE id = ?", (cur.lastrowid,)).fetchone()
-    return dict(row)
+        rows = c.execute("SELECT * FROM clients ORDER BY rowid").fetchall()
+        st = c.execute("SELECT * FROM sync_stats WHERE id = 1").fetchone()
+    if st is None:
+        raise HTTPException(502, "source unavailable and no synced data yet")
+    return {
+        "clients": [
+            {"name": r["name"], "phone": r["phone"], "email": r["email"], "amount": fmt_amount(r["amount"])}
+            for r in rows
+        ],
+        "stats": {
+            "received": st["received"],
+            "unique": st["unique"],
+            "duplicates_merged": st["duplicates_merged"],
+            "invalid_dropped": st["invalid_dropped"],
+        },
+    }
 
 
-@app.delete("/api/items/{item_id}", status_code=204)
-def delete_item(item_id: int):
-    with db() as c:
-        cur = c.execute("DELETE FROM items WHERE id = ?", (item_id,))
-    if cur.rowcount == 0:
-        raise HTTPException(404, "not found")
+@app.get("/")
+@app.get("/api/clients")
+@app.post("/api/sync")
+def clients():
+    try:
+        sync()
+    except Exception:
+        pass  # источник недоступен: отдаём последний сохранённый результат
+    return result()
 
 
 # --- Фронт ---------------------------------------------------------------
-
-@app.get("/")
-def index():
-    return FileResponse(STATIC_DIR / "index.html")
-
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
