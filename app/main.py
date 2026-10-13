@@ -1,13 +1,14 @@
+import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -56,6 +57,12 @@ def init_db():
                 received INTEGER, "unique" INTEGER,
                 duplicates_merged INTEGER, invalid_dropped INTEGER
             );
+            CREATE TABLE IF NOT EXISTS sync_meta (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                last_attempt_at TEXT, last_success_at TEXT,
+                last_error TEXT, last_error_at TEXT
+            );
+            INSERT OR IGNORE INTO sync_meta (id) VALUES (1);
             """
         )
 
@@ -162,15 +169,59 @@ def result() -> dict:
     }
 
 
+log = logging.getLogger("uvicorn.error")
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def run_sync() -> str | None:
+    """Синхронизация с фиксацией статуса. Возвращает текст ошибки или None."""
+    ts = now()
+    try:
+        sync()
+    except Exception as e:
+        err = f"{type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}"
+        log.error("sync failed, serving last snapshot: %s", err)
+        with db() as c:
+            c.execute(
+                "UPDATE sync_meta SET last_attempt_at=?, last_error=?, last_error_at=? WHERE id=1",
+                (ts, err, ts),
+            )
+        return err
+    with db() as c:
+        c.execute(
+            "UPDATE sync_meta SET last_attempt_at=?, last_success_at=?, last_error=NULL WHERE id=1",
+            (ts, ts),
+        )
+    return None
+
+
 @app.get("/")
 @app.get("/api/clients")
 @app.post("/api/sync")
-def clients():
-    try:
-        sync()
-    except Exception:
-        pass  # источник недоступен: отдаём последний сохранённый результат
-    return result()
+def clients(response: Response):
+    err = run_sync()
+    data = result()  # 502, если источник недоступен и снимка ещё нет
+    with db() as c:
+        meta = c.execute("SELECT * FROM sync_meta WHERE id=1").fetchone()
+    # Тело строго по схеме, статус синхронизации — в заголовках.
+    response.headers["X-Sync-Status"] = "stale" if err else "ok"
+    response.headers["X-Last-Sync"] = meta["last_success_at"] or ""
+    if err:
+        response.headers["X-Sync-Error"] = err.encode("ascii", "replace").decode()[:200]
+    return data
+
+
+@app.get("/api/sync/status")
+def sync_status():
+    with db() as c:
+        meta = dict(c.execute("SELECT * FROM sync_meta WHERE id=1").fetchone())
+    meta.pop("id")
+    meta["status"] = "stale" if meta["last_error"] else ("ok" if meta["last_success_at"] else "never")
+    meta["source_url"] = SOURCE_URL
+    return meta
 
 
 # --- Фронт ---------------------------------------------------------------
