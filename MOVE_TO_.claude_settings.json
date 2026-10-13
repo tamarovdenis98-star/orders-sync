@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./deploy.sh*)",
+      "Bash(bash deploy.sh*)",
+      "Bash(git *)",
+      "Bash(gh *)",
+      "Bash(curl *)",
+      "Bash(ssh *)",
+      "Bash(docker *)",
+      "Bash(python *)",
+      "Bash(pip *)",
+      "Bash(uvicorn *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(mkdir *)",
+      "Read",
+      "Edit",
+      "Write",
+      "WebFetch",
+      "WebSearch"
+    ]
+  }
+}

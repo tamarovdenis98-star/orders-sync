@@ -1,0 +1,7 @@
+# SITE_ADDRESS берётся из .env (его пишет deploy.sh из deploy.conf):
+#   test.example.com  → автоматический HTTPS (Let's Encrypt)
+#   :80               → просто http по IP, без домена
+{$SITE_ADDRESS::80} {
+	encode gzip
+	reverse_proxy app:8000
+}

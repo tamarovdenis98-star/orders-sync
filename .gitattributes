@@ -1,0 +1,2 @@
+# Не превращать переводы строк в CRLF на Windows: иначе .sh и Caddyfile ломаются на сервере
+* text=auto eol=lf
