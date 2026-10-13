@@ -10,12 +10,9 @@ import httpx
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 DB_PATH = os.getenv("DB_PATH", "/data/app.db")
-STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(title="Test task service")
 app.add_middleware(
@@ -222,8 +219,3 @@ def sync_status():
     meta["status"] = "stale" if meta["last_error"] else ("ok" if meta["last_success_at"] else "never")
     meta["source_url"] = SOURCE_URL
     return meta
-
-
-# --- Фронт ---------------------------------------------------------------
-
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

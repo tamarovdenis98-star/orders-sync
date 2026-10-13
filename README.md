@@ -41,4 +41,13 @@ curl https://144-31-229-139.sslip.io/api/sync/status
 (он в `.gitignore` и не попадает в репозиторий) и передавались в контейнер через `env_file`.
 
 ## Стек и деплой
-FastAPI + SQLite, Docker Compose, Caddy (авто-HTTPS через Let's Encrypt), VPS. Деплой: `./deploy.sh`.
+FastAPI + SQLite, Docker Compose, Caddy (авто-HTTPS через Let's Encrypt), VPS.
+
+- `scripts/server-setup.sh` — однократная подготовка сервера (Docker, порты 80/443).
+- `deploy.conf` — ssh-хост и домен; `./deploy.sh` — заливка на сервер, `docker compose up -d --build`, ожидание `/health`.
+
+Локальный запуск:
+```bash
+pip install -r requirements.txt
+DB_PATH=./data/app.db uvicorn app.main:app --reload
+```

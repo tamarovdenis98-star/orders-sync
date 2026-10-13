@@ -5,3 +5,8 @@ __pycache__/
 *.pyc
 .venv/
 .claude/settings.local.json
+
+# Локальные заметки подготовки, не часть сервиса
+CLAUDE.md
+PREP.md
+MOVE_TO_.claude_settings.json
